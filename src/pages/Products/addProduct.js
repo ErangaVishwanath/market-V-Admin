@@ -128,15 +128,36 @@ const ProductUpload = () => {
     window.scrollTo(0, 0);
     setCatData(context.catData);
 
-    fetchDataFromApi("/api/imageUpload").then((res) => {
-      res?.map((item) => {
-        item?.images?.map((img) => {
-          deleteImages(`/api/category/deleteImage?img=${img}`).then((res) => {
-            deleteData("/api/imageUpload/deleteAllImages");
+    fetchDataFromApi("/api/imageUpload")
+      .then(async (res) => {
+        if (Array.isArray(res)) {
+          const deletionPromises = [];
+          res.forEach((item) => {
+            if (Array.isArray(item?.images)) {
+              item.images.forEach((img) => {
+                deletionPromises.push(
+                  deleteImages(`/api/category/deleteImage?img=${img}`).catch(
+                    (err) =>
+                      console.error(`Failed to delete image ${img}:`, err)
+                  )
+                );
+              });
+            }
           });
-        });
+
+          try {
+            await Promise.all(deletionPromises);
+            await deleteData("/api/imageUpload/deleteAllImages");
+          } catch (error) {
+            console.error("Error during image cleanup:", error);
+          }
+        } else {
+          console.warn("/api/imageUpload did not return an array:", res);
+        }
+      })
+      .catch((error) => {
+        console.error("Error fetching or processing /api/imageUpload:", error);
       });
-    });
 
     fetchDataFromApi("/api/productWeight").then((res) => {
       setProductWEIGHTData(res);
@@ -154,16 +175,29 @@ const ProductUpload = () => {
   }, [context.selectedCountry]);
 
   useEffect(() => {
-    const subCatArr = [];
+    let subCatArr = []; // Initialize as empty array
 
-    context.catData?.categoryList?.length !== 0 &&
-      context.catData?.categoryList?.map((cat, index) => {
-        if (cat?.children.length !== 0) {
-          cat?.children?.map((subCat) => {
-            subCatArr.push(subCat);
-          });
+    // Check if categoryList exists and is an array
+    if (Array.isArray(context.catData?.categoryList)) {
+      subCatArr = context.catData.categoryList.flatMap((cat) => {
+        // Check if children exists and is an array before mapping/flattening
+        if (Array.isArray(cat?.children) && cat.children.length > 0) {
+          return cat.children; // Return the children array to be flattened
         }
+        return []; // Return an empty array if no children or not an array
       });
+    } else {
+      // Optional: Log a warning if categoryList is not as expected
+      if (
+        context.catData?.categoryList !== undefined &&
+        context.catData?.categoryList !== null
+      ) {
+        console.warn(
+          "context.catData.categoryList is not an array:",
+          context.catData.categoryList
+        );
+      }
+    }
 
     setSubCatData(subCatArr);
   }, [context.catData]);
@@ -181,7 +215,6 @@ const ProductUpload = () => {
   };
 
   const handleChangeProductRams = (event) => {
-
     const {
       target: { value },
     } = event;
@@ -194,7 +227,6 @@ const ProductUpload = () => {
   };
 
   const handleChangeProductWeight = (event) => {
-    
     const {
       target: { value },
     } = event;
@@ -289,44 +321,60 @@ const ProductUpload = () => {
       console.log(error);
     }
 
-    uploadImage(apiEndPoint, formdata).then((res) => {
-      fetchDataFromApi("/api/imageUpload").then((response) => {
-        if (
-          response !== undefined &&
-          response !== null &&
-          response !== "" &&
-          response.length !== 0
-        ) {
-          response.length !== 0 &&
-            response.map((item) => {
-              item?.images.length !== 0 &&
-                item?.images?.map((img) => {
-                  img_arr.push(img);
+    // Chain promises and add proper error handling
+    uploadImage(apiEndPoint, formdata)
+      .then((uploadRes) => {
+        // Optionally check uploadRes if needed
+        return fetchDataFromApi("/api/imageUpload"); // Return promise to chain
+      })
+      .then((response) => {
+        let currentImages = []; // Use a local array
 
-                  //console.log(img)
-                });
-            });
+        // Check if the response is an array
+        if (Array.isArray(response)) {
+          response.forEach((item) => {
+            // Check if item.images is an array
+            if (Array.isArray(item?.images)) {
+              item.images.forEach((img) => {
+                currentImages.push(img);
+              });
+            }
+          });
 
-          uniqueArray = img_arr.filter(
-            (item, index) => img_arr.indexOf(item) === index
+          // Calculate unique images from the locally scoped array
+          const uniqueArray = currentImages.filter(
+            (item, index) => currentImages.indexOf(item) === index
           );
-
-          //const appendedArray = [...previews, ...uniqueArray];
 
           setPreviews(uniqueArray);
 
+          // Use the uniqueArray directly if needed elsewhere immediately
+
           setTimeout(() => {
             setUploading(false);
-            img_arr = [];
+            // No need to clear img_arr as it's not used directly here anymore
             context.setAlertBox({
               open: true,
               error: false,
               msg: "Images Uploaded!",
             });
           }, 500);
+        } else {
+          // Handle case where response is not an array
+          console.warn("/api/imageUpload did not return an array:", response);
+          setUploading(false); // Ensure loading state is reset
         }
+      })
+      .catch((error) => {
+        // Catches errors from either uploadImage or fetchDataFromApi
+        console.error("Error during image upload or fetch:", error);
+        setUploading(false);
+        context.setAlertBox({
+          open: true,
+          error: true,
+          msg: "Image processing failed. Please try again.",
+        });
       });
-    });
   };
 
   const removeImg = async (index, imgUrl) => {

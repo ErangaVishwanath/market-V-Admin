@@ -176,113 +176,156 @@ const Dashboard = () => {
     context.setisHideSidebarAndHeader(false);
     window.scrollTo(0, 0);
     context.setProgress(40);
-    fetchDataFromApi(`/api/products`).then((res) => {
-      setProductList(res);
-      context.setProgress(100);
-    });
 
-    fetchDataFromApi("/api/user/get/count").then((res) => {
-      setTotalUsers(res.userCount);
-    });
+    const fetchDashboardData = async () => {
+      try {
+        // Fetch products
+        const productsRes = await fetchDataFromApi("/api/products");
+        setProductList(productsRes);
 
-    fetchDataFromApi("/api/orders/get/count").then((res) => {
-      setTotalOrders(res.orderCount);
-    });
+        // Fetch user count
+        const usersRes = await fetchDataFromApi("/api/user/get/count");
+        setTotalUsers(usersRes.userCount);
 
-    let sales = 0;
-    fetchDataFromApi("/api/orders/").then((res) => {
-      res?.length !== 0 &&
-        res?.map((item) => {
-          sales += parseInt(item.amount);
+        // Fetch order count
+        const ordersCountRes = await fetchDataFromApi("/api/orders/get/count");
+        setTotalOrders(ordersCountRes.orderCount);
+
+        // Fetch and calculate total sales
+        const ordersRes = await fetchDataFromApi("/api/orders/");
+        if (Array.isArray(ordersRes)) {
+          const totalSales = ordersRes.reduce((sum, item) => {
+            return sum + (parseInt(item.amount) || 0);
+          }, 0);
+          setTotalSales(totalSales);
+        }
+
+        // Fetch product count
+        const productsCountRes = await fetchDataFromApi(
+          "/api/products/get/count"
+        );
+        setTotalProducts(productsCountRes.productsCount);
+
+        // Fetch reviews count
+        const reviewsRes = await fetchDataFromApi(
+          "/api/productReviews/get/count"
+        );
+        setTotalProductsReviews(reviewsRes.productsReviews);
+
+        // Fetch sales data
+        const salesRes = await fetchDataFromApi("/api/orders/sales");
+        if (salesRes?.monthlySales && Array.isArray(salesRes.monthlySales)) {
+          const salesData = salesRes.monthlySales
+            .map((item) => ({
+              name: item?.month,
+              sales: parseInt(item?.sale) || 0,
+            }))
+            .filter(
+              (item, index, self) =>
+                index === self.findIndex((t) => t.name === item.name)
+            );
+          setSalesData(salesData);
+        }
+
+        context.setProgress(100);
+      } catch (error) {
+        console.error("Error fetching dashboard data:", error);
+        context.setProgress(100);
+        context.setAlertBox({
+          open: true,
+          error: true,
+          msg: "Failed to load dashboard data",
         });
+      }
+    };
 
-      setTotalSales(sales);
-    });
+    fetchDashboardData();
+  }, [context]);
 
-    fetchDataFromApi("/api/products/get/count").then((res) => {
-      setTotalProducts(res.productsCount);
-    });
+  const deleteProduct = async (id) => {
+    try {
+      context.setProgress(40);
+      await deleteData(`/api/products/${id}`);
 
-    fetchDataFromApi("/api/productReviews/get/count").then((res) => {
-      setTotalProductsReviews(res.productsReviews);
-    });
+      const updatedProducts = await fetchDataFromApi("/api/products");
+      setProductList(updatedProducts);
 
-    fetchDataFromApi(`/api/orders/sales`).then((res) => {
-      const sales = [];
-      res?.monthlySales?.length !== 0 &&
-        res?.monthlySales?.map((item) => {
-          sales.push({
-            name: item?.month,
-            sales: parseInt(item?.sale),
-          });
-        });
-
-      const uniqueArr = sales.filter(
-        (obj, index, self) =>
-          index === self.findIndex((t) => t.name === obj.name)
-      );
-      setSalesData(uniqueArr);
-      console.log(uniqueArr);
-    });
-  }, []);
-
-  const deleteProduct = (id) => {
-    context.setProgress(40);
-    deleteData(`/api/products/${id}`).then((res) => {
       context.setProgress(100);
       context.setAlertBox({
         open: true,
         error: false,
         msg: "Product Deleted!",
       });
-      fetchDataFromApi(`/api/products`).then((res) => {
-        setProductList(res);
+    } catch (error) {
+      console.error("Error deleting product:", error);
+      context.setProgress(100);
+      context.setAlertBox({
+        open: true,
+        error: true,
+        msg: "Failed to delete product",
       });
-    });
+    }
   };
 
-  const handleChangeCategory = (event) => {
-    if (event.target.value !== "all") {
-      setcategoryVal(event.target.value);
-      fetchDataFromApi(`/api/products/catId?catId=${event.target.value}`).then(
-        (res) => {
-          setProductList(res);
-          context.setProgress(100);
-        }
+  const handleChangeCategory = async (event) => {
+    try {
+      const value = event.target.value;
+      setcategoryVal(value);
+
+      const endpoint =
+        value === "all"
+          ? "/api/products"
+          : `/api/products/catId?catId=${value}`;
+
+      const products = await fetchDataFromApi(endpoint);
+      setProductList(products);
+      context.setProgress(100);
+    } catch (error) {
+      console.error("Error changing category:", error);
+      context.setAlertBox({
+        open: true,
+        error: true,
+        msg: "Failed to load products for selected category",
+      });
+    }
+  };
+
+  const searchProducts = async (keyword) => {
+    try {
+      const endpoint = keyword
+        ? `/api/search?q=${keyword}&page=1&perPage=${10000}`
+        : "/api/products";
+
+      const products = await fetchDataFromApi(endpoint);
+      setProductList(products);
+    } catch (error) {
+      console.error("Error searching products:", error);
+      context.setAlertBox({
+        open: true,
+        error: true,
+        msg: "Failed to search products",
+      });
+    }
+  };
+
+  const showPerPage = async (e) => {
+    try {
+      const value = e.target.value;
+      setshowBy(value);
+
+      const products = await fetchDataFromApi(
+        `/api/products?page=1&perPage=${value}`
       );
-    }
-    if (event.target.value === "all") {
-      setcategoryVal("all");
-      setcategoryVal(event.target.value);
-      fetchDataFromApi(`/api/products`).then((res) => {
-        setProductList(res);
-        context.setProgress(100);
+      setProductList(products);
+      context.setProgress(100);
+    } catch (error) {
+      console.error("Error updating per page count:", error);
+      context.setAlertBox({
+        open: true,
+        error: true,
+        msg: "Failed to update products per page",
       });
     }
-  };
-
-  const searchProducts = (keyword) => {
-    if (keyword !== "") {
-      fetchDataFromApi(`/api/search?q=${keyword}&page=1&perPage=${10000}`).then(
-        (res) => {
-          setProductList(res);
-        }
-      );
-    } else {
-      fetchDataFromApi(`/api/products`).then((res) => {
-        setProductList(res);
-      });
-    }
-  };
-
-  const showPerPage = (e) => {
-    setshowBy(e.target.value);
-    fetchDataFromApi(`/api/products?page=${1}&perPage=${e.target.value}`).then(
-      (res) => {
-        setProductList(res);
-        context.setProgress(100);
-      }
-    );
   };
 
   return (
@@ -296,25 +339,25 @@ const Dashboard = () => {
                 icon={<FaUserCircle />}
                 grow={true}
                 title="Total Users"
-                count={totalUsers}
+                count={totalUsers || 0}
               />
               <DashboardBox
                 color={["#c012e2", "#eb64fe"]}
                 icon={<IoMdCart />}
                 title="Total Orders"
-                count={totalOrders}
+                count={totalOrders || 0}
               />
               <DashboardBox
                 color={["#2c78e5", "#60aff5"]}
                 icon={<MdShoppingBag />}
                 title="Total Products"
-                count={totalProducts}
+                count={totalProducts || 0}
               />
               <DashboardBox
                 color={["#e1950e", "#f3cd29"]}
                 icon={<GiStarsStack />}
                 title="Total Reviews"
-                count={totalProductsReviews}
+                count={totalProductsReviews || 0}
               />
             </div>
           </div>

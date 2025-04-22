@@ -159,15 +159,29 @@ const EditUpload = () => {
 
     setCatData(context.catData);
 
-    fetchDataFromApi("/api/imageUpload").then((res) => {
-      res?.map((item) => {
-        item?.images?.map((img) => {
-          deleteImages(`/api/products/deleteImage?img=${img}`).then((res) => {
-            deleteData("/api/imageUpload/deleteAllImages");
+    fetchDataFromApi("/api/imageUpload")
+      .then(async (res) => {
+        if (Array.isArray(res)) {
+          const deletionPromises = [];
+          res.forEach((item) => {
+            if (Array.isArray(item?.images)) {
+              item.images.forEach((img) => {
+                deletionPromises.push(
+                  deleteImages(`/api/products/deleteImage?img=${img}`)
+                    .then(() => deleteData("/api/imageUpload/deleteAllImages"))
+                    .catch((err) =>
+                      console.error(`Failed to delete image ${img}:`, err)
+                    )
+                );
+              });
+            }
           });
-        });
+          await Promise.all(deletionPromises);
+        }
+      })
+      .catch((error) => {
+        console.error("Error during image cleanup:", error);
       });
-    });
 
     fetchDataFromApi(`/api/products/${id}`).then((res) => {
       console.log(res);
@@ -316,9 +330,7 @@ const EditUpload = () => {
       const files = e.target.files;
       setUploading(true);
 
-      //const fd = new FormData();
       for (var i = 0; i < files.length; i++) {
-        // Validate file type
         if (
           files[i] &&
           (files[i].type === "image/jpeg" ||
@@ -326,70 +338,83 @@ const EditUpload = () => {
             files[i].type === "image/png" ||
             files[i].type === "image/webp")
         ) {
-          const file = files[i];
-
-          formdata.append(`images`, file);
+          formdata.append(`images`, files[i]);
         } else {
           context.setAlertBox({
             open: true,
             error: true,
             msg: "Please select a valid JPG or PNG image file.",
           });
-
+          setUploading(false);
           return false;
         }
       }
-    } catch (error) {
-      console.log(error);
-    }
 
-    uploadImage(apiEndPoint, formdata).then((res) => {
-      fetchDataFromApi("/api/imageUpload").then((response) => {
-        if (
-          response !== undefined &&
-          response !== null &&
-          response !== "" &&
-          response.length !== 0
-        ) {
-          response.length !== 0 &&
-            response.map((item) => {
-              item?.images.length !== 0 &&
-                item?.images?.map((img) => {
-                  img_arr.push(img);
+      // Chain promises and handle errors properly
+      const uploadResult = await uploadImage(apiEndPoint, formdata);
+      const response = await fetchDataFromApi("/api/imageUpload");
 
-                  //console.log(img)
-                });
+      let currentImages = [];
+
+      if (Array.isArray(response)) {
+        response.forEach((item) => {
+          if (Array.isArray(item?.images)) {
+            item.images.forEach((img) => {
+              currentImages.push(img);
             });
+          }
+        });
 
-          uniqueArray = img_arr.filter(
-            (item, index) => img_arr.indexOf(item) === index
-          );
-          const appendedArray = [...previews, ...uniqueArray];
+        const uniqueArray = currentImages.filter(
+          (item, index) => currentImages.indexOf(item) === index
+        );
 
-          setPreviews(appendedArray);
+        setPreviews((prev) => [...prev, ...uniqueArray]);
 
-          setTimeout(() => {
-            setUploading(false);
-            img_arr = [];
-            uniqueArray=[];
-            fetchDataFromApi("/api/imageUpload").then((res) => {
-              res?.map((item) => {
-                item?.images?.map((img) => {
-                  deleteImages(`/api/products/deleteImage?img=${img}`).then((res) => {
-                    deleteData("/api/imageUpload/deleteAllImages");
+        // Cleanup after successful upload
+        setTimeout(async () => {
+          try {
+            const cleanupRes = await fetchDataFromApi("/api/imageUpload");
+            if (Array.isArray(cleanupRes)) {
+              const cleanupPromises = [];
+              cleanupRes.forEach((item) => {
+                if (Array.isArray(item?.images)) {
+                  item.images.forEach((img) => {
+                    cleanupPromises.push(
+                      deleteImages(`/api/products/deleteImage?img=${img}`).then(
+                        () => deleteData("/api/imageUpload/deleteAllImages")
+                      )
+                    );
                   });
-                });
+                }
               });
-            });
+              await Promise.all(cleanupPromises);
+            }
+
+            setUploading(false);
             context.setAlertBox({
               open: true,
               error: false,
               msg: "Images Uploaded!",
             });
-          }, 500);
-        }
+          } catch (error) {
+            console.error("Error during cleanup:", error);
+            setUploading(false);
+          }
+        }, 500);
+      } else {
+        setUploading(false);
+        console.warn("Response is not an array:", response);
+      }
+    } catch (error) {
+      console.error("Error in onChangeFile:", error);
+      setUploading(false);
+      context.setAlertBox({
+        open: true,
+        error: true,
+        msg: "Failed to process images. Please try again.",
       });
-    });
+    }
   };
 
   const removeImg = async (index, imgUrl) => {

@@ -72,44 +72,53 @@ const AddBanner = () => {
   const context = useContext(MyContext);
 
   useEffect(() => {
-    fetchDataFromApi("/api/imageUpload").then((res) => {
-      res?.map((item) => {
-        item?.images?.map((img) => {
-          deleteImages(`/api/homeBanner/deleteImage?img=${img}`).then((res) => {
-            deleteData("/api/imageUpload/deleteAllImages");
+    // Initial cleanup of uploaded images
+    fetchDataFromApi("/api/imageUpload")
+      .then(async (res) => {
+        if (Array.isArray(res)) {
+          const deletionPromises = [];
+          res.forEach((item) => {
+            if (Array.isArray(item?.images)) {
+              item.images.forEach((img) => {
+                deletionPromises.push(
+                  deleteImages(`/api/homeBanner/deleteImage?img=${img}`)
+                    .then(() => deleteData("/api/imageUpload/deleteAllImages"))
+                    .catch((err) =>
+                      console.error(`Failed to delete image ${img}:`, err)
+                    )
+                );
+              });
+            }
           });
-        });
+          await Promise.all(deletionPromises);
+        }
+      })
+      .catch((error) => {
+        console.error("Error during initial image cleanup:", error);
       });
-    });
   }, []);
 
-  useEffect(()=>{
-    const subCatArr=[];
+  useEffect(() => {
+    // Process subcategories from category data
+    if (Array.isArray(context.catData?.categoryList)) {
+      const subCatArr = context.catData.categoryList.reduce((acc, cat) => {
+        if (Array.isArray(cat?.children)) {
+          return [...acc, ...cat.children];
+        }
+        return acc;
+      }, []);
 
-    context.catData?.categoryList?.length !== 0 && context.catData?.categoryList?.map((cat, index) => {
-            if(cat?.children.length!==0){
-                cat?.children?.map((subCat)=>{
-                    subCatArr.push(subCat);
-                })
-            }
-    });
-
-    setSubCatData(subCatArr);
-},[context.catData])
-
-
-  let img_arr = [];
-  let uniqueArray = [];
-  let selectedImages = [];
+      setSubCatData(subCatArr);
+    }
+  }, [context.catData]);
 
   const onChangeFile = async (e, apiEndPoint) => {
     try {
       const files = e.target.files;
       setUploading(true);
 
-      //const fd = new FormData();
-      for (var i = 0; i < files.length; i++) {
-        // Validate file type
+      // Validate and append files
+      for (let i = 0; i < files.length; i++) {
         if (
           files[i] &&
           (files[i].type === "image/jpeg" ||
@@ -117,149 +126,172 @@ const AddBanner = () => {
             files[i].type === "image/png" ||
             files[i].type === "image/webp")
         ) {
-          const file = files[i];
-
-          formdata.append(`images`, file);
+          formdata.append("images", files[i]);
         } else {
           context.setAlertBox({
             open: true,
             error: true,
             msg: "Please select a valid JPG or PNG image file.",
           });
-
+          setUploading(false);
           return false;
         }
       }
-    } catch (error) {
-      console.log(error);
-    }
 
-    uploadImage(apiEndPoint, formdata).then((res) => {
-      fetchDataFromApi("/api/imageUpload").then((response) => {
-        if (
-          response !== undefined &&
-          response !== null &&
-          response !== "" &&
-          response.length !== 0
-        ) {
-          response.length !== 0 &&
-            response.map((item) => {
-              item?.images.length !== 0 &&
-                item?.images?.map((img) => {
-                  img_arr.push(img);
+      // Upload images and process response
+      await uploadImage(apiEndPoint, formdata);
+      const response = await fetchDataFromApi("/api/imageUpload");
 
-                  //console.log(img)
-                });
+      if (Array.isArray(response)) {
+        const newImages = [];
+
+        // Collect all image URLs
+        response.forEach((item) => {
+          if (Array.isArray(item?.images)) {
+            item.images.forEach((img) => {
+              newImages.push(img);
             });
+          }
+        });
 
-          uniqueArray = img_arr.filter(
-            (item, index) => img_arr.indexOf(item) === index
-          );
-          const appendedArray = [...previews, ...uniqueArray];
+        // Filter unique images
+        const uniqueImages = newImages.filter(
+          (item, index) => newImages.indexOf(item) === index
+        );
 
-          setPreviews(appendedArray);
+        // Update previews with both existing and new images
+        setPreviews((prev) => [...prev, ...uniqueImages]);
 
-          setTimeout(() => {
-            setUploading(false);
-            img_arr = [];
-            uniqueArray=[];
-            fetchDataFromApi("/api/imageUpload").then((res) => {
-              res?.map((item) => {
-                item?.images?.map((img) => {
-                  deleteImages(`/api/homeBanner/deleteImage?img=${img}`).then((res) => {
-                    deleteData("/api/imageUpload/deleteAllImages");
-                  });
-                });
-              });
-            });
-            context.setAlertBox({
-              open: true,
-              error: false,
-              msg: "Images Uploaded!",
-            });
-          }, 500);
+        // Cleanup uploaded images
+        try {
+          const cleanupRes = await fetchDataFromApi("/api/imageUpload");
+          if (Array.isArray(cleanupRes)) {
+            await Promise.all(
+              cleanupRes.flatMap((item) =>
+                Array.isArray(item?.images)
+                  ? item.images.map((img) =>
+                      deleteImages(
+                        `/api/homeBanner/deleteImage?img=${img}`
+                      ).then(() =>
+                        deleteData("/api/imageUpload/deleteAllImages")
+                      )
+                    )
+                  : []
+              )
+            );
+          }
+        } catch (cleanupError) {
+          console.error("Error during cleanup:", cleanupError);
         }
+
+        setUploading(false);
+        context.setAlertBox({
+          open: true,
+          error: false,
+          msg: "Images Uploaded!",
+        });
+      } else {
+        throw new Error("Invalid response format from image upload");
+      }
+    } catch (error) {
+      console.error("Error in image upload:", error);
+      setUploading(false);
+      context.setAlertBox({
+        open: true,
+        error: true,
+        msg: "Failed to upload images. Please try again.",
       });
-    });
+    }
   };
 
   const removeImg = async (index, imgUrl) => {
-    const imgIndex = previews.indexOf(imgUrl);
-
-    deleteImages(`/api/banners/deleteImage?img=${imgUrl}`).then((res) => {
+    try {
+      await deleteImages(`/api/banners/deleteImage?img=${imgUrl}`);
+      setPreviews((prev) => prev.filter((_, i) => i !== index));
       context.setAlertBox({
         open: true,
         error: false,
         msg: "Image Deleted!",
       });
-    });
-
-    if (imgIndex > -1) {
-      // only splice array when item is found
-      previews.splice(index, 1); // 2nd parameter means remove one item only
+    } catch (error) {
+      console.error("Error deleting image:", error);
+      context.setAlertBox({
+        open: true,
+        error: true,
+        msg: "Failed to delete image",
+      });
     }
   };
 
   const handleChangeCategory = (event) => {
     setcategoryVal(event.target.value);
-    setFormFields(() => ({
-      ...formFields,
+    setFormFields((prev) => ({
+      ...prev,
       category: event.target.value,
     }));
   };
 
   const selectCat = (cat, id) => {
-    formFields.catName = cat;
-    formFields.catId = id;
+    setFormFields((prev) => ({
+      ...prev,
+      catName: cat,
+      catId: id,
+    }));
   };
 
-  const selectSubCat=(subCat, id)=>{
-    setFormFields(() => ({
-        ...formFields,
-        subCat: subCat,
-        subCatName: subCat,
-        subCatId:id
-    }))
-
-}
+  const selectSubCat = (subCat, id) => {
+    setFormFields((prev) => ({
+      ...prev,
+      subCat: subCat,
+      subCatName: subCat,
+      subCatId: id,
+    }));
+  };
 
   const handleChangeSubCategory = (event) => {
     setSubCatVal(event.target.value);
-};
+  };
 
-  const addHomeBanner = (e) => {
+  const addHomeBanner = async (e) => {
     e.preventDefault();
 
-    const appendedArray = [...previews, ...uniqueArray];
-
-    img_arr = [];
-
-    formdata.append("images", appendedArray);
-
-    formFields.images = appendedArray;
-
-    if (previews.length !== 0) {
-      setIsLoading(true);
-
-
-        console.log(formFields)
-
-      postData(`/api/banners/create`, formFields).then((res) => {
-        // console.log(res);
-        setIsLoading(false);
-        context.fetchCategory();
-
-        deleteData("/api/imageUpload/deleteAllImages");
-
-        history("/banners");
-      });
-    } else {
+    if (previews.length === 0) {
       context.setAlertBox({
         open: true,
         error: true,
-        msg: "Please fill all the details",
+        msg: "Please upload at least one image",
       });
       return false;
+    }
+
+    try {
+      setIsLoading(true);
+
+      const bannerData = {
+        ...formFields,
+        images: [...previews],
+      };
+
+      await postData("/api/banners/create", bannerData);
+      await deleteData("/api/imageUpload/deleteAllImages");
+
+      context.fetchCategory();
+      history("/banners");
+
+      context.setAlertBox({
+        open: true,
+        error: false,
+        msg: "Banner created successfully!",
+      });
+    } catch (error) {
+      console.error("Error creating banner:", error);
+      context.setAlertBox({
+        open: true,
+        error: true,
+        msg: "Failed to create banner",
+      });
+    } finally {
+      setIsLoading(false);
     }
   };
 

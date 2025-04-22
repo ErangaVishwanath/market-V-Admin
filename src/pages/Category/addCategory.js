@@ -65,15 +65,30 @@ const AddCategory = () => {
   const context = useContext(MyContext);
 
   useEffect(() => {
-    fetchDataFromApi("/api/imageUpload").then((res) => {
-      res?.map((item) => {
-        item?.images?.map((img) => {
-          deleteImages(`/api/category/deleteImage?img=${img}`).then((res) => {
-            deleteData("/api/imageUpload/deleteAllImages");
+    // Image cleanup on component mount
+    fetchDataFromApi("/api/imageUpload")
+      .then(async (res) => {
+        if (Array.isArray(res)) {
+          const deletionPromises = [];
+          res.forEach((item) => {
+            if (Array.isArray(item?.images)) {
+              item.images.forEach((img) => {
+                deletionPromises.push(
+                  deleteImages(`/api/category/deleteImage?img=${img}`)
+                    .then(() => deleteData("/api/imageUpload/deleteAllImages"))
+                    .catch((err) =>
+                      console.error(`Failed to delete image ${img}:`, err)
+                    )
+                );
+              });
+            }
           });
-        });
+          await Promise.all(deletionPromises);
+        }
+      })
+      .catch((error) => {
+        console.error("Error during initial image cleanup:", error);
       });
-    });
   }, []);
 
   const changeInput = (e) => {
@@ -83,20 +98,15 @@ const AddCategory = () => {
     }));
   };
 
-  let img_arr = [];
-  let uniqueArray = [];
-  let selectedImages = [];
-
   const onChangeFile = async (e, apiEndPoint) => {
     try {
       const files = e.target.files;
-
-      console.log(files);
       setUploading(true);
 
-      //const fd = new FormData();
-      for (var i = 0; i < files.length; i++) {
-        // Validate file type
+      const selectedImages = [];
+
+      // Validate and append files
+      for (let i = 0; i < files.length; i++) {
         if (
           files[i] &&
           (files[i].type === "image/jpeg" ||
@@ -104,62 +114,64 @@ const AddCategory = () => {
             files[i].type === "image/png" ||
             files[i].type === "image/webp")
         ) {
-          const file = files[i];
-          selectedImages.push(file);
-          formdata.append(`images`, file);
+          selectedImages.push(files[i]);
+          formdata.append("images", files[i]);
         } else {
           context.setAlertBox({
             open: true,
             error: true,
             msg: "Please select a valid JPG or PNG image file.",
           });
-
+          setUploading(false);
           return false;
         }
       }
 
       formFields.images = selectedImages;
+
+      // Upload images and process response
+      const uploadResult = await uploadImage(apiEndPoint, formdata);
+      const response = await fetchDataFromApi("/api/imageUpload");
+
+      if (Array.isArray(response)) {
+        const newImages = [];
+
+        // Collect all image URLs
+        response.forEach((item) => {
+          if (Array.isArray(item?.images)) {
+            item.images.forEach((img) => {
+              newImages.push(img);
+            });
+          }
+        });
+
+        // Filter unique images
+        const uniqueImages = newImages.filter(
+          (item, index) => newImages.indexOf(item) === index
+        );
+
+        setPreviews(uniqueImages);
+
+        setTimeout(() => {
+          setUploading(false);
+          context.setAlertBox({
+            open: true,
+            error: false,
+            msg: "Images Uploaded!",
+          });
+        }, 200);
+      } else {
+        throw new Error("Invalid response format from image upload");
+      }
     } catch (error) {
-      console.log(error);
-    }
-
-    uploadImage(apiEndPoint, formdata).then((res) => {
-      console.log(selectedImages);
-      fetchDataFromApi("/api/imageUpload").then((response) => {
-        if (
-          response !== undefined &&
-          response !== null &&
-          response !== "" &&
-          response.length !== 0
-        ) {
-          response.length !== 0 &&
-            response.map((item) => {
-              item?.images.length !== 0 &&
-                item?.images?.map((img) => {
-                  img_arr.push(img);
-                  //console.log(img)
-                });
-            });
-
-          uniqueArray = img_arr.filter(
-            (item, index) => img_arr.indexOf(item) === index
-          );
-
-          //  const appendedArray = [...previews, ...uniqueArray];
-
-          setPreviews(uniqueArray);
-          setTimeout(() => {
-            setUploading(false);
-            img_arr = [];
-            context.setAlertBox({
-              open: true,
-              error: false,
-              msg: "Images Uploaded!",
-            });
-          }, 200);
-        }
+      console.error("Error in image upload:", error);
+      setUploading(false);
+      context.setAlertBox({
+        open: true,
+        error: true,
+        msg: "Failed to upload images. Please try again.",
       });
-    });
+    }
   };
 
   const removeImg = async (index, imgUrl) => {
@@ -182,16 +194,9 @@ const AddCategory = () => {
   const addCat = (e) => {
     e.preventDefault();
 
-    const appendedArray = [...previews, ...uniqueArray];
-
-    img_arr = [];
-    // formdata.append('name', formFields.name);
-    // formdata.append('color', formFields.color);
-
-    // formdata.append('images', appendedArray);
-
+    // Use only the current previews array
     formFields.slug = formFields.name;
-    formFields.images = appendedArray;
+    formFields.images = [...previews];
 
     if (
       formFields.name !== "" &&
@@ -200,15 +205,22 @@ const AddCategory = () => {
     ) {
       setIsLoading(true);
 
-      postData(`/api/category/create`, formFields).then((res) => {
-        // console.log(res);
-        setIsLoading(false);
-        context.fetchCategory();
-
-        deleteData("/api/imageUpload/deleteAllImages");
-
-        history("/category");
-      });
+      postData(`/api/category/create`, formFields)
+        .then((res) => {
+          setIsLoading(false);
+          context.fetchCategory();
+          deleteData("/api/imageUpload/deleteAllImages");
+          history("/category");
+        })
+        .catch((error) => {
+          console.error("Error creating category:", error);
+          setIsLoading(false);
+          context.setAlertBox({
+            open: true,
+            error: true,
+            msg: "Failed to create category. Please try again.",
+          });
+        });
     } else {
       context.setAlertBox({
         open: true,
